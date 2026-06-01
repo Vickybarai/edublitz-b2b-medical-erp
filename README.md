@@ -1,4 +1,4 @@
-[MY_README](https://github.com/Vickybarai/edublitz-b2b-medical-erp/feature/MY-README.md)
+[MY_README](MY-README.md)
 # EduBlitz Medical B2B ERP System
 
 A production-grade **Medical Domain B2B ERP** platform for hospitals, distributors, and medical vendors. Built with a microservices architecture on AWS infrastructure.
