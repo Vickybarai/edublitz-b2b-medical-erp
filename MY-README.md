@@ -1,5 +1,6 @@
 # 🚀 Ultimate Beginner's Guide: MedPharm ERP Deployment
-
+[meansrepo](https://github.com/shubhamkalsait/edublitz-b2b-medical-erp/tree/project-b22)
+[meank8s_guide](https://github.com/shubhamkalsait/edublitz-b2b-medical-erp/blob/project-b22/docs/KUBERNETES_DEPLOYMENT.md)
 ## 🗺️ Navigation Roadmap
 This guide is divided into **5 Phases**.
 1.  🟢 **Phase 1:** Infrastructure Setup (Cloud Resources).
