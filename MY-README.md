@@ -597,3 +597,7 @@ We need to map your custom domain to the Load Balancer/CloudFront.
 3. **Backend SSL:** Create Certificate in `ap-southeast-2`, update `ingress.yaml` with the Backend ARN.
 4. **DNS Mapping:** Update Route 53 records to point to the CloudFront (Frontend) and Load Balancer (Backend).
 5. **Final Check:** Test the full user flow from Frontend to Backend.
+
+
+---
+[LB steps](https://github.com/shubhamkalsait/edublitz-b2b-medical-erp/blob/project-b22/docs/aws-lb-ingress.md)
