@@ -386,3 +386,214 @@ curl http://<LOAD-BALANCER-ADDRESS>/api/v1/users/health
     *   **Fix:** Check if the Secret `app-secrets` was created. Run `kubectl describe secret app-secrets -n med-erp` to see if the password matches MongoDB Atlas.
 *   **Error:** `502 Bad Gateway` on Ingress.
     *   **Fix:** This is usually the Load Balancer waiting for the Target Groups. Wait 2-3 minutes. If it persists, check the **AWS Console > EC2 > Load Balancers > Target Groups** to see if the Instance Health is healthy.
+
+
+
+
+
+
+
+===
+___
+
+
+# 🚀 Final Phase: Frontend to Backend Integration & SSL Setup
+
+**Objective:** Connect the Frontend (React) and Backend (Spring Boot) using custom domains and secure connections (HTTPS), resolving the IAM permission issues from the previous session.
+
+---
+
+## 🛑️ Phase 1: Pre-Requisites Check
+Before starting, ensure the following are ready:
+1.  **Backend Check:**
+    *   **EKS Cluster:** `medfarm-cluster` (Region: `ap-southeast-2`) is running.
+    *   **Pods:** Run `kubectl get pods -n med-erp` to ensure User, Product, and Order pods are `Running`.
+    *   **Database:** MongoDB Atlas cluster `edublitz-cluster` is active with databases: `users-db`, `products-db`, `orders-db`.
+2.  **Docker Images:** Images (`user-app`, `product-app`, `order-app`) are pushed to ECR.
+3.  **Route 53:** A Hosted Zone already exists for your domain.
+
+---
+
+## 🔒 Phase 2: Fixing the IAM Permission Issue (The "Missing Part")
+**Problem:** In the previous session, the AWS Load Balancer Controller failed to create the Ingress. The error was `Invalid identity token` / `Failed to refresh cached credentials`.
+
+**Root Cause:** The EKS Node Group did not have the necessary IAM policy to create AWS Load Balancers.
+
+### Step 2.1: Update Node Role Policy
+1.  Go to **AWS Console** > **EC2** > **Node Groups** > Select `medfarm-nodegroup`.
+2.  Click the **IAM Role** link (this takes you to the IAM console).
+3.  Click **Add permissions** > **Attach policies**.
+4.  Search for: `AmazonEKSLoadBalancingPolicy`.
+5.  Select it and click **Add permissions**.
+
+*Result:* Now, when you apply the Ingress YAML, the AWS Load Balancer will successfully create because the nodes have permission to talk to AWS.
+
+---
+
+## 🌐 Phase 3: SSL Certificates & Region Rules (Crucial Step)
+This is the most important concept to master. **CloudFront and EKS use SSL from different regions.**
+
+### Rule #1: Frontend (S3 + CloudFront)
+*   **SSL Requirement:** For CloudFront, the SSL Certificate **MUST** be created in the **North Virginia (`us-east-1`) region.
+*   *Reason:* CloudFront is a global service, but it only trusts certificates from `us-east-1`.
+
+### Rule #2: Backend (EKS + Ingress)
+*   **SSL Requirement:** For the Load Balancer (Ingress) used by EKS, the SSL Certificate **MUST** be in the **Same Region as the Cluster** (`ap-sou-east-2`).
+
+---
+
+## 📂 Phase 4: Setup Backend SSL (Ingress Certificate)
+
+We need a certificate for the API subdomain (e.g., `api.edublitz-b2b-erp.online`).
+
+1.  **Switch Region:** In the AWS Console, change the top right region to **Asia Pacific (Sydney)** to match your EKS region.
+2.  Go to **Certificate Manager (ACM)** > **Request a public certificate**.
+3.  **Domain Name:** `api.edublitz-b2b-erp.online` (Use a subdomain if your main domain is locked or pending).
+4.  **Validation Method:** **DNS Validation**.
+5.  **Create Record:** Click **Create Record in Route 53**.
+6.  **Update:** Wait 2-5 minutes for the status to change from `Pending validation` to **Issued**.
+7.  **Copy the ARN:** Save the Amazon Resource Name (ARN). It looks like:
+    `arn:aws:acm:ap-southeast-2:123456789:certificate/xxxx-xxxx-xxxx`
+
+---
+
+## ☁️ Phase 5: Setup CloudFront (Frontend Deployment)
+We will host the React frontend on S3 and expose it via CloudFront using the SSL Certificate created in Phase 4.
+
+### Step 5.1: Create CloudFront Distribution
+1.  **Switch Region:** **Crucial:** Change region back to **North Virginia (`us-east-1`) because CloudFront requires this region for SSL integration.
+2.  Go to **CloudFront** > **Distributions** > **Create distribution**.
+3.  **Origin Settings:**
+    *   **Origin Domain:** Select your **S3 Bucket** (e.g., `medpharm-frontend-b22`).
+    *   **Viewer Protocol Policy:** Redirect HTTP to HTTPS.
+4. **Settings:**
+    *   **Alternate Domain Names:** Add your frontend domain (e.g., `edublitz-b2b-erp.online`).
+    *   **Custom SSL Certificate:** Select the certificate you created in **Phase 4** (North Virginia region).
+5.  **Create Distribution:**
+    *   Wait 20-30 minutes for the status to become **Deployed**.
+
+*Note: If your main domain (`ajublitz.com`) is already taken or has issues, use a subdomain like `erp.ajublitz.com` or `edublitz-b2b-erp.online`.*
+
+---
+
+## 🌍 Phase 6: Setup Backend Ingress (Load Balancer Integration)
+We will expose the Backend APIs via the Load Balancer using the Backend SSL Certificate.
+
+### Step 6.1: Update `ingress.yaml`
+Open your `k8s/ingress/ingress.yaml`. You must update two things to connect the domain and SSL.
+
+1.  **Add Domain:**
+    ```yaml
+    spec:
+      rules:
+        - host: api.edublitz-b2b-erp.online
+    ```
+2.  **Add Annotations for Security:**
+    Find the `annotations` section and add these lines:
+    ```yaml
+    annotations:
+      alb.ingress.kubernetes.io/certificate-arn: "arn:aws:acm:ap-southeast-2:123456789:certificate/xxxx-xxxx-xxxx" # PASTE THE ARN FROM PHASE 4 HERE
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+      alb.ingress.kubernetes.io/ssl-redirect: '443'  # Force HTTPS
+    ```
+3. **Update Security Group (Advanced):**
+    *   In the AWS Console, create a new Security Group (e.g., `medfarm-sg`).
+    *   Inbound rules: Allow **HTTPS (Port 443)** traffic from `0.0.0.0/0` (Anywhere) to access the API.
+
+### Step 6.2: Update Security Group in Ingress
+You can do this in the YAML, but for beginners, it's easier in the AWS Console.
+1.  Go to **EC2** > **Load Balancers**.
+2.  Find your **Application Load Balancer** (Auto-created by the Ingress).
+3.  Click the **Security** tab.
+4.  Click **Edit** > **Edit Security Groups**.
+5. Add the `medfarm-sg` created in Step 6.1.
+6.  Click **Save changes**.
+
+---
+
+## 🖥️ Phase 7: Apply Changes & Verify
+
+### Step 7.1: Apply Ingress YAML
+Run the command:
+```bash
+kubectl apply -f k8s/ingress/ingress.yaml -n med-erp
+```
+
+### Step 7.2: Verify the Load Balancer
+1.  Check Ingress status:
+    ```bash
+    kubectl get ingress -n med-erp
+    ```
+2.  Look at the **ADDRESS** field. You will see a long URL like:
+    `medfarm-ingress-xxxxxxxxx.elb.amazonaws.com`.
+
+---
+
+## 🌐 Phase 8: Route 53 (Connecting Domain to Services)
+We need to map your custom domain to the Load Balancer/CloudFront.
+
+### 8.1: Frontend Route (S3 + CloudFront)
+1.  Go to **Route 53** > **Hosted Zones**.
+2.  Select your Hosted Zone.
+3.  **Create Record:**
+    *   **Record Type:** **A Record**.
+    *   **Record name:** `edublitz-b2b-erp.online`.
+    *   **Value:** `s3-website-website-xxxxx.cloudfront.net` (Copy from your CloudFront Distribution Settings).
+4.  **Result:** Opening `https://edublitz-b2b-erp.online` should now show your React application.
+
+### 8.2: Backend Route (API)
+1.  In the **Same Hosted Zone**, **Create Record**:
+    *   **Record Type:** **CNAME** (Alias).
+    *   **Record name:** `api` (for `api.edublitz-b2b-erp.online`).
+    *   **Value:** The **ADDRESS** of the Load Balancer (copied in Phase 7.2).
+2.  **Result:** Opening `https://api.edublitz-b2b-erp.online` should hit the Backend API.
+
+---
+
+## ✅ Phase 9: Final Verification
+
+### 1. Frontend Test
+1.  Open your browser.
+2.  Go to: `https://edublitz-b2b-erp.online`.
+3. **Expected:** You should see the Login Page.
+
+### 2. Backend API Test
+1.  Go to: `https://api.edublitz-b2b-api.online/actuator/health` (or `/actuator/health` depending on your context path).
+2.  **Expected Output:** `{"status": "UP"}`.
+3. **Expected Output:** `{"status": "UP"}`.
+
+### 3. Login Functionality (Full Integration)
+1.  Log in as an Admin (User: `admin` / Password: `admin`).
+2.  Create an Organization.
+3.  Create a Product (e.g., "Paracetamol").
+4.  Place an Order.
+5. **Check:** Verify if the order reflects in the MongoDB Atlas dashboard.
+
+---
+
+## 🛠️ Troubleshooting Common Errors
+
+### Error 1: "You do not have permission to access this certificate"
+*   **Cause:** You are trying to use a certificate created in `ap-southeast-2` for CloudFront, OR you don't have the **AWSLoadBalancingController** policy in the Node Role.
+*   **Fix:** Ensure you added the policy as shown in **Phase 2**. If CloudFront is failing, ensure the certificate is in `us-east-1`.
+
+### Error 2: "502 Bad Gateway"
+*   **Cause:** The Security Group attached to the Load Balancer is not allowing port 443 traffic.
+*   **Fix:** Follow **Phase 6.2** to ensure your Security Group allows traffic on port 443.
+
+### Error 3: "Cross-Origin Read Blocking (CORS)"
+*   **Cause:** The backend (Spring Boot) is blocking requests from your Frontend domain.
+*   **Fix:** Developers must add `@CrossOrigin` annotations in the Java code or update the Ingress annotations to handle CORS.
+
+### Error 4: Frontend Loads but API fails
+*   **Check:** Did you update the `ingress.yaml` with the new ARN? Did you update the Security Group?
+*   **Check:** Did you wait 10-15 minutes for Route 53 to propagate?
+
+---
+
+## 🎓 Summary of Steps
+1.  **Fix IAM:** Add `AmazonEKSLoadBalancingPolicy` to the Node Role.
+2.  **Frontend SSL:** Create Certificate in `us-east-1`, apply to CloudFront.
+3. **Backend SSL:** Create Certificate in `ap-southeast-2`, update `ingress.yaml` with the Backend ARN.
+4. **DNS Mapping:** Update Route 53 records to point to the CloudFront (Frontend) and Load Balancer (Backend).
+5. **Final Check:** Test the full user flow from Frontend to Backend.
